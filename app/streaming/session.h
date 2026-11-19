@@ -105,6 +105,8 @@ public:
     Q_INVOKABLE void start();
     Q_INVOKABLE void interrupt();
     Q_PROPERTY(QStringList launchWarnings MEMBER m_LaunchWarnings NOTIFY launchWarningsChanged);
+    Q_PROPERTY(QString computerUuid READ computerUuid CONSTANT);
+    Q_PROPERTY(QString computerName READ computerName CONSTANT);
 
     static
     void getDecoderInfo(SDL_Window* window,
@@ -120,6 +122,10 @@ public:
     {
         return m_OverlayManager;
     }
+
+    // [streamlock-patch] Host identity for the per-PC password gate
+    QString computerUuid() const { return m_Computer->uuid; }
+    QString computerName() const { return m_Computer->name; }
 
     void flushWindowEvents();
 

@@ -7,6 +7,7 @@ import StreamingPreferences 1.0
 import ComputerManager 1.0
 import SdlGamepadKeyNavigation 1.0
 import SystemProperties 1.0
+import StreamLock 1.0
 
 Flickable {
     id: settingsPage
@@ -1536,6 +1537,387 @@ Flickable {
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Allows Moonlight to capture gamepad inputs even if it's not the current window in focus")
+                }
+            }
+        }
+
+        // [streamlock-patch] 串流密码锁：管理员密码 + 每台电脑单独密码
+        GroupBox {
+            id: streamLockGroupBox
+            width: (parent.width - (parent.leftPadding + parent.rightPadding))
+            padding: 14
+            title: "<font color=\"skyblue\">" + qsTr("串流密码锁") + "</font>"
+            font.pointSize: 12
+
+            Column {
+                anchors.fill: parent
+                spacing: 12
+
+                Label {
+                    width: parent.width
+                    text: qsTr("给电脑单独加密码：在列表里右键电脑 →「添加密码…」。修改或删除密码、删除电脑，都要先输入管理员密码。")
+                    font.pointSize: 9
+                    color: "#9e9e9e"
+                    wrapMode: Text.Wrap
+                }
+
+                Row {
+                    spacing: 8
+
+                    Button {
+                        font.pointSize: 9
+                        text: StreamLock.adminPasswordSet ? qsTr("修改管理员密码…") : qsTr("设置管理员密码…")
+                        onClicked: adminPasswordDialog.openForEdit()
+                    }
+
+                    Button {
+                        font.pointSize: 9
+                        visible: StreamLock.adminPasswordSet
+                        text: qsTr("移除密码锁")
+                        onClicked: adminRemoveDialog.openForEdit()
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 1
+                    color: "#33444444"
+                }
+
+                Row {
+                    spacing: 10
+
+                    Label {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("多久后再问密码")
+                        font.pointSize: 9
+                        color: "#bdbdbd"
+                    }
+
+                    ComboBox {
+                        id: unlockWindowComboBox
+                        width: 220
+                        font.pointSize: 9
+                        textRole: "label"
+
+                        property var windowOptions: [
+                            { label: "1 分钟后", minutes: 1 },
+                            { label: "5 分钟后", minutes: 5 },
+                            { label: "30 分钟后", minutes: 30 },
+                            { label: "2 小时后", minutes: 120 },
+                            { label: "重启 Moonlight 后才再问", minutes: 1440 }
+                        ]
+
+                        model: windowOptions
+
+                        function syncIndex() {
+                            for (var i = 0; i < windowOptions.length; i++) {
+                                if (windowOptions[i].minutes === StreamLock.unlockWindowMinutes) {
+                                    currentIndex = i
+                                    return
+                                }
+                            }
+                        }
+
+                        Component.onCompleted: syncIndex()
+                        onActivated: StreamLock.setUnlockWindowMinutes(windowOptions[index].minutes)
+
+                        Connections {
+                            target: StreamLock
+                            onStateChanged: unlockWindowComboBox.syncIndex()
+                        }
+                    }
+                }
+
+                Button {
+                    font.pointSize: 9
+                    text: qsTr("立即全部重新上锁")
+                    onClicked: StreamLock.lockAllHosts()
+                }
+
+                Label {
+                    width: parent.width
+                    visible: StreamLock.adminPasswordSet
+                    text: qsTr("有密码的电脑右上角会显示小锁。忘了管理员密码就只能删掉 Moonlight 的设置文件（所有串流密码会一起清掉）。")
+                    font.pointSize: 9
+                    color: "#9e9e9e"
+                    wrapMode: Text.Wrap
+                }
+
+                NavigableDialog {
+                    id: adminPasswordDialog
+                    standardButtons: Dialog.NoButton
+                    implicitWidth: 400
+                    width: 400
+                    padding: 24
+                    property string errorText: ""
+
+                    readonly property bool formValid: (!StreamLock.adminPasswordSet || adminCurrentField.text.length > 0)
+                                                       && adminNewField.text.length >= StreamLock.minimumPasswordLength
+                                                       && adminNewField.text === adminConfirmField.text
+
+                    function openForEdit() {
+                        adminCurrentField.text = ""
+                        adminNewField.text = ""
+                        adminConfirmField.text = ""
+                        errorText = ""
+                        open()
+                    }
+
+                    onOpened: {
+                        if (StreamLock.adminPasswordSet) {
+                            adminCurrentField.forceActiveFocus()
+                        }
+                        else {
+                            adminNewField.forceActiveFocus()
+                        }
+                    }
+
+                    onAccepted: {
+                        var error = StreamLock.setAdminPassword(adminCurrentField.text, adminNewField.text)
+                        if (error !== "") {
+                            errorText = error
+                            Qt.callLater(function() { adminPasswordDialog.open() })
+                        }
+                    }
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: 14
+
+                        RowLayout {
+                            spacing: 10
+
+                            Image {
+                                source: "qrc:/res/baseline-lock-24px.svg"
+                                sourceSize.width: 20
+                                sourceSize.height: 20
+                            }
+
+                            Label {
+                                text: StreamLock.adminPasswordSet ? qsTr("修改管理员密码") : qsTr("设置管理员密码")
+                                font.pointSize: 14
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("管理员密码只用来保护这些设置，串流时不会用到它。")
+                            font.pointSize: 10
+                            color: "#b0bec5"
+                            wrapMode: Label.WordWrap
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: adminPasswordDialog.errorText
+                            color: "#ff8a80"
+                            font.pointSize: 10
+                            wrapMode: Label.WordWrap
+                            visible: text !== ""
+                        }
+
+                        ColumnLayout {
+                            spacing: 5
+                            Layout.fillWidth: true
+                            visible: StreamLock.adminPasswordSet
+
+                            Label {
+                                text: qsTr("当前管理员密码")
+                                font.pointSize: 10
+                                color: "#b0bec5"
+                            }
+
+                            TextField {
+                                id: adminCurrentField
+                                Layout.fillWidth: true
+                                implicitHeight: 38
+                                font.pointSize: 11
+                                echoMode: TextInput.Password
+                            }
+                        }
+
+                        ColumnLayout {
+                            spacing: 5
+                            Layout.fillWidth: true
+
+                            Label {
+                                text: qsTr("新管理员密码（至少 %1 位）").arg(StreamLock.minimumPasswordLength)
+                                font.pointSize: 10
+                                color: "#b0bec5"
+                            }
+
+                            TextField {
+                                id: adminNewField
+                                Layout.fillWidth: true
+                                implicitHeight: 38
+                                font.pointSize: 11
+                                echoMode: TextInput.Password
+                            }
+                        }
+
+                        ColumnLayout {
+                            spacing: 5
+                            Layout.fillWidth: true
+
+                            Label {
+                                text: qsTr("再输一次")
+                                font.pointSize: 10
+                                color: "#b0bec5"
+                            }
+
+                            TextField {
+                                id: adminConfirmField
+                                Layout.fillWidth: true
+                                implicitHeight: 38
+                                font.pointSize: 11
+                                echoMode: TextInput.Password
+                            }
+                        }
+
+                        Item {
+                            height: 2
+                        }
+
+                        RowLayout {
+                            spacing: 8
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+
+                            Button {
+                                text: qsTr("取消")
+                                flat: true
+                                font.pointSize: 10
+                                implicitWidth: 88
+                                implicitHeight: 34
+                                onClicked: adminPasswordDialog.reject()
+                            }
+
+                            Button {
+                                text: qsTr("确定")
+                                highlighted: true
+                                font.pointSize: 10
+                                implicitWidth: 96
+                                implicitHeight: 34
+                                enabled: adminPasswordDialog.formValid
+                                onClicked: adminPasswordDialog.accept()
+                            }
+                        }
+                    }
+                }
+
+                NavigableDialog {
+                    id: adminRemoveDialog
+                    standardButtons: Dialog.NoButton
+                    implicitWidth: 400
+                    width: 400
+                    padding: 24
+                    property string errorText: ""
+
+                    readonly property bool formValid: adminRemoveField.text.length > 0
+
+                    function openForEdit() {
+                        adminRemoveField.text = ""
+                        errorText = ""
+                        open()
+                    }
+
+                    onOpened: adminRemoveField.forceActiveFocus()
+
+                    onAccepted: {
+                        var error = StreamLock.removeAdminPassword(adminRemoveField.text)
+                        if (error !== "") {
+                            errorText = error
+                            Qt.callLater(function() { adminRemoveDialog.open() })
+                        }
+                    }
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: 14
+
+                        RowLayout {
+                            spacing: 10
+
+                            Image {
+                                source: "qrc:/res/baseline-lock-24px.svg"
+                                sourceSize.width: 20
+                                sourceSize.height: 20
+                            }
+
+                            Label {
+                                text: qsTr("移除密码锁")
+                                font.pointSize: 14
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("输入管理员密码来移除密码锁。每台电脑的串流密码也会一起删掉。")
+                            font.pointSize: 10
+                            color: "#b0bec5"
+                            wrapMode: Label.WordWrap
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: adminRemoveDialog.errorText
+                            color: "#ff8a80"
+                            font.pointSize: 10
+                            wrapMode: Label.WordWrap
+                            visible: text !== ""
+                        }
+
+                        TextField {
+                            id: adminRemoveField
+                            Layout.fillWidth: true
+                            implicitHeight: 38
+                            font.pointSize: 11
+                            placeholderText: qsTr("管理员密码")
+                            echoMode: TextInput.Password
+                        }
+
+                        Item {
+                            height: 2
+                        }
+
+                        RowLayout {
+                            spacing: 8
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+
+                            Button {
+                                text: qsTr("取消")
+                                flat: true
+                                font.pointSize: 10
+                                implicitWidth: 88
+                                implicitHeight: 34
+                                onClicked: adminRemoveDialog.reject()
+                            }
+
+                            Button {
+                                text: qsTr("确定")
+                                highlighted: true
+                                font.pointSize: 10
+                                implicitWidth: 96
+                                implicitHeight: 34
+                                enabled: adminRemoveDialog.formValid
+                                onClicked: adminRemoveDialog.accept()
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -5,6 +5,7 @@ import QtQuick.Window 2.2
 import SdlGamepadKeyNavigation 1.0
 import Session 1.0
 import SystemProperties 1.0
+import StreamLock 1.0
 
 Item {
     property Session session
@@ -92,6 +93,12 @@ Item {
         }
     }
 
+    function beginStream()
+    {
+        // Kick off the stream
+        streamLoader.active = true
+    }
+
     function sessionReadyForDeletion()
     {
         // Garbage collect the Session object since it's pretty heavyweight
@@ -125,8 +132,15 @@ Item {
         // since it may currently be using the SDL video subsystem
         SystemProperties.waitForAsyncLoad()
 
-        // Kick off the stream
-        streamLoader.active = true
+        // [streamlock-patch] Ask for this PC's stream password before connecting
+        if (StreamLock.hostHasPassword(session.computerUuid) && !StreamLock.hostUnlocked(session.computerUuid)) {
+            lockDialog.hostUuid = session.computerUuid
+            lockDialog.hostName = session.computerName
+            lockDialog.open()
+        }
+        else {
+            beginStream()
+        }
     }
 
     Timer {
@@ -230,5 +244,25 @@ Item {
         verticalAlignment: Text.AlignVCenter
 
         wrapMode: Text.Wrap
+    }
+
+    // [streamlock-patch] Password prompt shown before a stream is started
+    StreamLockDialog {
+        id: lockDialog
+
+        onUnlocked: beginStream()
+
+        onCancelled: {
+            // Drop the pending session and go back to the app list
+            sessionReadyForDeletion()
+
+            // CLI launches have no app list to go back to
+            if (quitAfter) {
+                Qt.quit()
+                return
+            }
+
+            stackView.pop()
+        }
     }
 }

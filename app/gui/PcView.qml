@@ -8,6 +8,7 @@ import ComputerManager 1.0
 import StreamingPreferences 1.0
 import SystemProperties 1.0
 import SdlGamepadKeyNavigation 1.0
+import StreamLock 1.0
 
 CenteredGridView {
     property ComputerModel computerModel : createModel()
@@ -19,6 +20,16 @@ CenteredGridView {
     bottomMargin: 5
     cellWidth: 310; cellHeight: 330;
     objectName: qsTr("Computers")
+
+    // [streamlock-patch] 密码流程的临时状态
+    property string pendingAction: ""
+    property int pendingComputerIndex: -1
+    property string pendingComputerName: ""
+    property bool pendingShowHidden: false
+    property int pendingDeleteIndex: -1
+    property string pendingDeleteName: ""
+    property string pendingEditUuid: ""
+    property string pendingEditName: ""
 
     Component.onCompleted: {
         // Don't show any highlighted item until interacting with them.
@@ -82,6 +93,112 @@ CenteredGridView {
         return model
     }
 
+    // [streamlock-patch] Open a PC, asking for its stream password when needed
+    function requestAppView(computerIndex, name, uuid, showHidden)
+    {
+        if (StreamLock.hostHasPassword(uuid) && !StreamLock.hostUnlocked(uuid)) {
+            pendingAction = "appview"
+            pendingComputerIndex = computerIndex
+            pendingComputerName = name
+            pendingShowHidden = showHidden
+            hostUnlockDialog.hostUuid = uuid
+            hostUnlockDialog.hostName = name
+            hostUnlockDialog.open()
+            return
+        }
+
+        openAppView(computerIndex, name, showHidden)
+    }
+
+    function openAppView(computerIndex, name, showHidden)
+    {
+        var component = Qt.createComponent("AppView.qml")
+        var appView = component.createObject(stackView, {"computerIndex": computerIndex, "objectName": name, "showHiddenGames": showHidden})
+        stackView.push(appView)
+    }
+
+    function openPendingAppView()
+    {
+        if (pendingComputerIndex >= 0) {
+            openAppView(pendingComputerIndex, pendingComputerName, pendingShowHidden)
+            pendingComputerIndex = -1
+        }
+    }
+
+    // [streamlock-patch] 右键菜单：添加/修改这台电脑的串流密码
+    // 已有密码时：管理员密码或这台电脑的当前密码都能通过
+    // 还没有密码时：只接受管理员密码
+    function requestPasswordEdit(uuid, name)
+    {
+        const hasPassword = StreamLock.hostHasPassword(uuid)
+
+        if (!hasPassword && !StreamLock.adminPasswordSet) {
+            errorDialog.text = qsTr("请先在「设置 → 串流密码锁」里设置管理员密码。")
+            errorDialog.helpText = ""
+            errorDialog.open()
+            return
+        }
+
+        pendingAction = "edit"
+        pendingEditUuid = uuid
+        pendingEditName = name
+
+        if (hasPassword) {
+            // 修改已有密码：每次都要先验证（管理员密码或这台电脑的串流密码）
+            adminPasswordDialog.hostUuid = uuid
+            adminPasswordDialog.promptText = qsTr("请输入管理员密码，或「%1」的串流密码。").arg(name)
+            adminPasswordDialog.open()
+            return
+        }
+
+        // 第一次添加密码：管理员密码即可（验证过 10 分钟内不重复问）
+        if (StreamLock.adminUnlocked) {
+            openHostPasswordDialog()
+            return
+        }
+
+        adminPasswordDialog.hostUuid = ""
+        adminPasswordDialog.promptText = qsTr("请输入管理员密码。")
+        adminPasswordDialog.open()
+    }
+
+    function openHostPasswordDialog()
+    {
+        hostPasswordDialog.hostUuid = pendingEditUuid
+        hostPasswordDialog.hostName = pendingEditName
+        hostPasswordDialog.open()
+    }
+
+    // [streamlock-patch] 删除电脑也要管理员密码
+    function requestDeletePc(computerIndex, name, uuid)
+    {
+        pendingDeleteIndex = computerIndex
+        pendingDeleteName = name
+
+        // 没设管理员密码时保持原样
+        if (!StreamLock.adminPasswordSet) {
+            openDeletePcDialog()
+            return
+        }
+
+        pendingAction = "delete"
+        if (StreamLock.adminUnlocked) {
+            openDeletePcDialog()
+        }
+        else {
+            adminPasswordDialog.hostUuid = ""
+            adminPasswordDialog.promptText = qsTr("删除电脑需要管理员密码。")
+            adminPasswordDialog.open()
+        }
+    }
+
+    function openDeletePcDialog()
+    {
+        deletePcDialog.pcIndex = pendingDeleteIndex
+        deletePcDialog.pcName = pendingDeleteName
+        deletePcDialog.open()
+    }
+
     Row {
         anchors.centerIn: parent
         spacing: 5
@@ -111,6 +228,13 @@ CenteredGridView {
         grid: pcGrid
 
         property alias pcContextMenu : pcContextMenuLoader.item
+
+        // [streamlock-patch] 这台电脑是否有串流密码
+        property bool hostLocked: {
+            // 依赖 revision，改密码后角标会自动刷新
+            StreamLock.revision
+            return StreamLock.hostHasPassword(model.uuid)
+        }
 
         Image {
             id: pcIcon
@@ -160,6 +284,40 @@ CenteredGridView {
             elide: Text.ElideRight
         }
 
+        // [streamlock-patch] 有密码的电脑右上角显示一个小锁胶囊
+        Rectangle {
+            visible: hostLocked
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.margins: 10
+            width: lockBadgeRow.width + 16
+            height: 24
+            radius: 12
+            color: "#3300bcd4"
+            border.width: 1
+            border.color: "#4400bcd4"
+
+            Row {
+                id: lockBadgeRow
+                anchors.centerIn: parent
+                spacing: 4
+
+                Image {
+                    anchors.verticalCenter: parent.verticalCenter
+                    source: "qrc:/res/baseline-lock-24px.svg"
+                    sourceSize.width: 13
+                    sourceSize.height: 13
+                }
+
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("密码")
+                    font.pointSize: 8
+                    color: "#4dd0e1"
+                }
+            }
+        }
+
         // Display a tooltip with the full name if it's truncated
         ToolTip.text: model.name
         ToolTip.delay: 1000
@@ -179,11 +337,7 @@ CenteredGridView {
                 }
                 NavigableMenuItem {
                     text: qsTr("View All Apps")
-                    onTriggered: {
-                        var component = Qt.createComponent("AppView.qml")
-                        var appView = component.createObject(stackView, {"computerIndex": index, "objectName": model.name, "showHiddenGames": true})
-                        stackView.push(appView)
-                    }
+                    onTriggered: pcGrid.requestAppView(index, model.name, model.uuid, true)
                     visible: model.online && model.paired
                 }
                 NavigableMenuItem {
@@ -208,12 +362,17 @@ CenteredGridView {
                     }
                 }
                 NavigableMenuItem {
-                    text: qsTr("Delete PC")
-                    onTriggered: {
-                        deletePcDialog.pcIndex = index
-                        deletePcDialog.pcName = model.name
-                        deletePcDialog.open()
+                    text: {
+                        // 菜单是独立组件，这里不能直接引用 delegate 的属性
+                        StreamLock.revision
+                        return StreamLock.hostHasPassword(model.uuid) ? qsTr("修改密码…") : qsTr("添加密码…")
                     }
+                    visible: model.paired
+                    onTriggered: pcGrid.requestPasswordEdit(model.uuid, model.name)
+                }
+                NavigableMenuItem {
+                    text: qsTr("删除电脑")
+                    onTriggered: pcGrid.requestDeletePc(index, model.name, model.uuid)
                 }
                 NavigableMenuItem {
                     text: qsTr("View Details")
@@ -233,10 +392,8 @@ CenteredGridView {
                     errorDialog.open()
                 }
                 else if (model.paired) {
-                    // go to game view
-                    var component = Qt.createComponent("AppView.qml")
-                    var appView = component.createObject(stackView, {"computerIndex": index, "objectName": model.name})
-                    stackView.push(appView)
+                    // [streamlock-patch] Ask for this PC's password before opening it
+                    pcGrid.requestAppView(index, model.name, model.uuid, false)
                 }
                 else {
                     var pin = computerModel.generatePinString()
@@ -280,9 +437,7 @@ CenteredGridView {
         }
 
         Keys.onDeletePressed: {
-            deletePcDialog.pcIndex = index
-            deletePcDialog.pcName = model.name
-            deletePcDialog.open()
+            pcGrid.requestDeletePc(index, model.name, model.uuid)
         }
     }
 
@@ -404,6 +559,28 @@ CenteredGridView {
         text: showPcDetailsDialog.pcDetails
         imageSrc: "qrc:/res/baseline-help_outline-24px.svg"
         standardButtons: Dialog.Ok
+    }
+
+    // [streamlock-patch] 串流/删除前的密码弹窗，以及添加/修改密码弹窗
+    StreamLockDialog {
+        id: hostUnlockDialog
+        onUnlocked: pcGrid.openPendingAppView()
+    }
+
+    AdminPasswordDialog {
+        id: adminPasswordDialog
+        onVerified: {
+            if (pcGrid.pendingAction === "delete") {
+                pcGrid.openDeletePcDialog()
+            }
+            else {
+                pcGrid.openHostPasswordDialog()
+            }
+        }
+    }
+
+    HostPasswordDialog {
+        id: hostPasswordDialog
     }
 
     ScrollBar.vertical: ScrollBar {}

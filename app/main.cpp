@@ -53,6 +53,7 @@
 #include "backend/systemproperties.h"
 #include "streaming/session.h"
 #include "settings/streamingpreferences.h"
+#include "settings/streamlock.h"
 #include "gui/sdlgamepadkeynavigation.h"
 
 #if defined(Q_OS_WIN32)
@@ -972,6 +973,11 @@ int main(int argc, char *argv[])
                                                    [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
                                                        return StreamingPreferences::get(qmlEngine);
                                                    });
+    qmlRegisterSingletonType<StreamLock>("StreamLock", 1, 0,
+                                         "StreamLock",
+                                         [](QQmlEngine*, QJSEngine*) -> QObject* {
+                                             return new StreamLock();
+                                         });
 
     // Create the identity manager on the main thread
     IdentityManager::get();
